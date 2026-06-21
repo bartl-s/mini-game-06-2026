@@ -21,6 +21,25 @@ let state = STATE.MENU;
 // --- Globale Spielzeit (für Animationen) -----------------------------------
 let ticks = 0;
 
+// --- Punkte ----------------------------------------------------------------
+let score = 0;
+let best = loadBest();
+
+function loadBest() {
+  try {
+    return parseInt(localStorage.getItem("duckyfloat_best") || "0", 10) || 0;
+  } catch (e) {
+    return 0;
+  }
+}
+function saveBest() {
+  try {
+    localStorage.setItem("duckyfloat_best", String(best));
+  } catch (e) {
+    /* localStorage evtl. blockiert — egal */
+  }
+}
+
 // ===========================================================================
 // GUMMIENTE
 // ===========================================================================
@@ -187,6 +206,39 @@ function drawPipeRim(x, yTop) {
   ctx.fillRect(rx, yTop + RIM_H - 2, rw, 2);
 }
 
+// Kreis (Ente) gegen Rechteck testen.
+function circleHitsRect(cx, cy, r, rx, ry, rw, rh) {
+  const nx = Math.max(rx, Math.min(cx, rx + rw));
+  const ny = Math.max(ry, Math.min(cy, ry + rh));
+  const dx = cx - nx;
+  const dy = cy - ny;
+  return dx * dx + dy * dy < r * r;
+}
+
+// Prüft Kollision der Ente mit irgendeinem Rohr.
+function duckHitsPipe() {
+  for (const p of pipes) {
+    // nur Rohre in der Nähe der Ente prüfen
+    if (p.x + PIPE_W < DUCK_X - DUCK_R || p.x > DUCK_X + DUCK_R) continue;
+    const topH = p.gapY;
+    const botY = p.gapY + gapH;
+    const botH = H - FLOOR_H - botY;
+    if (circleHitsRect(DUCK_X, duck.y, DUCK_R, p.x, 0, PIPE_W, topH)) return true;
+    if (circleHitsRect(DUCK_X, duck.y, DUCK_R, p.x, botY, PIPE_W, botH)) return true;
+  }
+  return false;
+}
+
+// Score erhöhen, wenn die Ente ein Rohr passiert hat.
+function updateScore() {
+  for (const p of pipes) {
+    if (!p.passed && p.x + PIPE_W < DUCK_X) {
+      p.passed = true;
+      score++;
+    }
+  }
+}
+
 function drawPipes() {
   for (const p of pipes) {
     const topH = p.gapY;
@@ -219,13 +271,19 @@ function flap() {
 function startGame() {
   resetDuck();
   resetPipes();
+  score = 0;
   flapDuck(); // kleiner Anschub beim Start
   state = STATE.PLAY;
 }
 
 function gameOver() {
+  if (state !== STATE.PLAY) return;
   state = STATE.OVER;
-  overLockUntil = ticks + 30; // ~0.5 s Sperre
+  overLockUntil = ticks + 36; // ~0.6 s Sperre gegen Sofort-Neustart
+  if (score > best) {
+    best = score;
+    saveBest();
+  }
 }
 
 window.addEventListener("keydown", (e) => {
@@ -268,14 +326,18 @@ function update() {
   if (state === STATE.PLAY) {
     updateDuck();
     updatePipes();
-    // Boden / Decke beenden das Spiel erst ab Schritt 4 sauber; vorerst clampen.
+    updateScore();
+    // Decke: anstoßen, aber nicht sterben (klassisches Flappy-Verhalten)
+    if (duck.y < DUCK_R) {
+      duck.y = DUCK_R;
+      if (duck.vy < 0) duck.vy = 0;
+    }
+    // Boden = Game Over
     if (duck.y > H - FLOOR_H - DUCK_R) {
       duck.y = H - FLOOR_H - DUCK_R;
-      duck.vy = 0;
-    }
-    if (duck.y < 0) {
-      duck.y = 0;
-      duck.vy = 0;
+      gameOver();
+    } else if (duckHitsPipe()) {
+      gameOver();
     }
   }
 }
@@ -306,11 +368,36 @@ function draw() {
     drawPipes();
     drawFloor();
     drawDuck(DUCK_X, duck.y, duckAngle());
+    pixelText(String(score), W / 2, 54, 40, "#ffffff");
   } else if (state === STATE.OVER) {
     drawPipes();
     drawFloor();
     drawDuck(DUCK_X, duck.y, duckAngle());
-    pixelText("GAME OVER", W / 2, H / 2, 20, "#e23b3b");
+    drawGameOver();
+  }
+}
+
+// Game-Over-Panel mit Score & Highscore.
+function drawGameOver() {
+  // halbtransparenter Overlay
+  ctx.fillStyle = "rgba(26, 20, 40, 0.55)";
+  ctx.fillRect(0, 0, W, H);
+  // Panel
+  const pw = 200;
+  const ph = 170;
+  const px = (W - pw) / 2;
+  const py = (H - ph) / 2 - 10;
+  ctx.fillStyle = "#fff0b8";
+  ctx.fillRect(px - 3, py - 3, pw + 6, ph + 6);
+  ctx.fillStyle = "#2a2140";
+  ctx.fillRect(px, py, pw, ph);
+
+  pixelText("GAME OVER", W / 2, py + 34, 24, "#e23b3b");
+  pixelText("SCORE", W / 2, py + 74, 14, "#b8a8d8");
+  pixelText(String(score), W / 2, py + 100, 30, "#ffd23f");
+  pixelText("BEST  " + best, W / 2, py + 134, 14, "#7ec8d6");
+  if (Math.floor(ticks / 30) % 2 === 0) {
+    pixelText("TAP FÜR NEUSTART", W / 2, py + ph + 24, 12, "#ffffff");
   }
 }
 
