@@ -235,6 +235,7 @@ function updateScore() {
     if (!p.passed && p.x + PIPE_W < DUCK_X) {
       p.passed = true;
       score++;
+      sndPoint();
     }
   }
 }
@@ -326,15 +327,99 @@ function drawBackground() {
 }
 
 // ===========================================================================
+// SOUND (synthetisiert via Web Audio API — keine externen Dateien)
+// ===========================================================================
+let audioCtx = null;
+let muted = loadMuted();
+
+function loadMuted() {
+  try {
+    return localStorage.getItem("duckyfloat_muted") === "1";
+  } catch (e) {
+    return false;
+  }
+}
+function toggleMute() {
+  muted = !muted;
+  try {
+    localStorage.setItem("duckyfloat_muted", muted ? "1" : "0");
+  } catch (e) {}
+}
+
+// AudioContext darf erst nach einer Nutzergeste erzeugt werden.
+function ensureAudio() {
+  if (!audioCtx) {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    } catch (e) {
+      audioCtx = null;
+    }
+  }
+  if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+}
+
+// Ein Ton mit Hüllkurve und optionalem Frequenz-Sweep.
+function tone(freq, freqTo, dur, type, vol, startAt) {
+  if (!audioCtx || muted) return;
+  const t0 = audioCtx.currentTime + (startAt || 0);
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t0);
+  if (freqTo && freqTo !== freq) {
+    osc.frequency.exponentialRampToValueAtTime(Math.max(1, freqTo), t0 + dur);
+  }
+  gain.gain.setValueAtTime(0.0001, t0);
+  gain.gain.exponentialRampToValueAtTime(vol, t0 + 0.008);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start(t0);
+  osc.stop(t0 + dur + 0.02);
+}
+
+// Gummienten-Quietschen: kurzer Chirp hoch-runter.
+function sndSqueak() {
+  tone(1100, 1500, 0.07, "square", 0.12, 0);
+  tone(1500, 950, 0.07, "square", 0.1, 0.06);
+}
+// Punkt: helles Zwei-Ton-Bling.
+function sndPoint() {
+  tone(880, 880, 0.07, "square", 0.12, 0);
+  tone(1320, 1320, 0.1, "square", 0.12, 0.07);
+}
+// Crash: kurzer Rausch-Knall + absteigender Ton.
+function sndCrash() {
+  if (!audioCtx || muted) return;
+  tone(320, 50, 0.32, "sawtooth", 0.16, 0);
+  // Rauschburst
+  const t0 = audioCtx.currentTime;
+  const len = Math.floor(audioCtx.sampleRate * 0.18);
+  const buf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) {
+    data[i] = (Math.random() * 2 - 1) * (1 - i / len);
+  }
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(0.12, t0);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.18);
+  src.connect(g).connect(audioCtx.destination);
+  src.start(t0);
+}
+
+// ===========================================================================
 // EINGABE
 // ===========================================================================
 let overLockUntil = 0; // verhindert versehentlichen Sofort-Neustart
 
 function flap() {
+  ensureAudio();
   if (state === STATE.MENU) {
     startGame();
   } else if (state === STATE.PLAY) {
     flapDuck();
+    sndSqueak();
   } else if (state === STATE.OVER) {
     if (ticks >= overLockUntil) startGame();
   }
@@ -352,26 +437,62 @@ function gameOver() {
   if (state !== STATE.PLAY) return;
   state = STATE.OVER;
   overLockUntil = ticks + 36; // ~0.6 s Sperre gegen Sofort-Neustart
+  sndCrash();
   if (score > best) {
     best = score;
     saveBest();
   }
 }
 
+// Bereich des Lautsprecher-Icons (oben rechts).
+const MUTE_BTN = { x: W - 30, y: 8, w: 22, h: 20 };
+function pointInMuteBtn(px, py) {
+  return (
+    px >= MUTE_BTN.x - 4 &&
+    px <= MUTE_BTN.x + MUTE_BTN.w + 4 &&
+    py >= MUTE_BTN.y - 4 &&
+    py <= MUTE_BTN.y + MUTE_BTN.h + 4
+  );
+}
+
+// Canvas-Koordinaten aus einem Pointer-Event (berücksichtigt CSS-Skalierung).
+function canvasPos(clientX, clientY) {
+  const r = canvas.getBoundingClientRect();
+  return {
+    x: ((clientX - r.left) / r.width) * W,
+    y: ((clientY - r.top) / r.height) * H,
+  };
+}
+
 window.addEventListener("keydown", (e) => {
   if (e.code === "Space" || e.code === "ArrowUp" || e.code === "KeyW") {
     e.preventDefault();
     flap();
+  } else if (e.code === "KeyM") {
+    toggleMute();
   }
 });
 canvas.addEventListener("mousedown", (e) => {
   e.preventDefault();
+  const p = canvasPos(e.clientX, e.clientY);
+  if (pointInMuteBtn(p.x, p.y)) {
+    ensureAudio();
+    toggleMute();
+    return;
+  }
   flap();
 });
 canvas.addEventListener(
   "touchstart",
   (e) => {
     e.preventDefault();
+    const t = e.changedTouches[0];
+    const p = canvasPos(t.clientX, t.clientY);
+    if (pointInMuteBtn(p.x, p.y)) {
+      ensureAudio();
+      toggleMute();
+      return;
+    }
     flap();
   },
   { passive: false }
@@ -462,6 +583,49 @@ function draw() {
     drawDuck(DUCK_X, duck.y, duckAngle());
     drawGameOver();
   }
+
+  drawMuteIcon();
+}
+
+// Lautsprecher-Icon (klein, oben rechts). Zeigt an/aus.
+function drawMuteIcon() {
+  const x = MUTE_BTN.x;
+  const y = MUTE_BTN.y;
+  ctx.save();
+  // Box-Hintergrund für Lesbarkeit
+  ctx.fillStyle = "rgba(26,20,40,0.35)";
+  ctx.fillRect(x - 4, y - 3, MUTE_BTN.w + 8, MUTE_BTN.h + 6);
+  ctx.fillStyle = "#ffffff";
+  // Lautsprecher-Korpus
+  ctx.fillRect(x, y + 6, 5, 8);
+  ctx.beginPath();
+  ctx.moveTo(x + 5, y + 10);
+  ctx.lineTo(x + 12, y + 3);
+  ctx.lineTo(x + 12, y + 17);
+  ctx.lineTo(x + 5, y + 10);
+  ctx.fill();
+  if (muted) {
+    // rotes Kreuz
+    ctx.strokeStyle = "#e23b3b";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x + 14, y + 4);
+    ctx.lineTo(x + 21, y + 16);
+    ctx.moveTo(x + 21, y + 4);
+    ctx.lineTo(x + 14, y + 16);
+    ctx.stroke();
+  } else {
+    // Schallwellen
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(x + 13, y + 10, 4, -0.9, 0.9);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x + 13, y + 10, 7, -0.9, 0.9);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 // Game-Over-Panel mit Score & Highscore.
