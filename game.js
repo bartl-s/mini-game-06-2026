@@ -110,6 +110,98 @@ function duckAngle() {
 }
 
 // ===========================================================================
+// HINDERNISSE (Badezimmer-Rohre)
+// ===========================================================================
+const FLOOR_H = 56; // Höhe des Bodens (Wasser/Fliesen) unten
+const PIPE_W = 54; // Breite eines Rohrs
+const RIM_H = 16; // Höhe der Rohr-Kappe an der Lücke
+const RIM_OVER = 5; // wie weit die Kappe seitlich übersteht
+
+// Schwierigkeit (wird in Schritt 7 dynamisch erhöht)
+let pipeSpeed = 2.1; // Scroll-Tempo
+let gapH = 142; // Lückenhöhe
+const SPAWN_X = W + 40; // Startposition rechts außerhalb
+const SPAWN_GAP_PX = 168; // horizontaler Abstand zwischen Rohren
+
+let pipes = [];
+let spawnAcc = 0;
+
+function resetPipes() {
+  pipes = [];
+  spawnAcc = 0;
+  pipeSpeed = 2.1;
+  gapH = 142;
+}
+
+function spawnPipe() {
+  const minGapY = 46;
+  const maxGapY = H - FLOOR_H - gapH - 46;
+  const gapY = minGapY + Math.random() * (maxGapY - minGapY);
+  pipes.push({ x: SPAWN_X, gapY, passed: false });
+}
+
+function updatePipes() {
+  // Tempo-basiertes Spawnen, damit der Abstand bei Tempoänderung konstant bleibt.
+  spawnAcc += pipeSpeed;
+  if (pipes.length === 0 || spawnAcc >= SPAWN_GAP_PX) {
+    spawnPipe();
+    spawnAcc = 0;
+  }
+  for (const p of pipes) p.x -= pipeSpeed;
+  // alte Rohre entfernen
+  pipes = pipes.filter((p) => p.x + PIPE_W > -RIM_OVER);
+}
+
+// Ein Rohr-Segment im Pixel-Chrom-Look zeichnen.
+function drawPipeSegment(x, y, h) {
+  // Korpus mit vertikalem Verlauf (links dunkel, Mitte hell -> Chrom-Glanz)
+  ctx.fillStyle = "#8fa6b8";
+  ctx.fillRect(x, y, PIPE_W, h);
+  ctx.fillStyle = "#c6d6e2"; // Glanzstreifen
+  ctx.fillRect(x + 8, y, 10, h);
+  ctx.fillStyle = "#eef6fb"; // heller Highlight
+  ctx.fillRect(x + 10, y, 4, h);
+  ctx.fillStyle = "#5f7488"; // rechte Schattenkante
+  ctx.fillRect(x + PIPE_W - 8, y, 8, h);
+  ctx.fillStyle = "#3f5060"; // Außenlinie links/rechts
+  ctx.fillRect(x, y, 3, h);
+  ctx.fillRect(x + PIPE_W - 3, y, 3, h);
+}
+
+// Kappe (Rim) an der Lücken-Seite.
+function drawPipeRim(x, yTop) {
+  const rx = x - RIM_OVER;
+  const rw = PIPE_W + RIM_OVER * 2;
+  ctx.fillStyle = "#8fa6b8";
+  ctx.fillRect(rx, yTop, rw, RIM_H);
+  ctx.fillStyle = "#c6d6e2";
+  ctx.fillRect(rx + 8, yTop, 12, RIM_H);
+  ctx.fillStyle = "#eef6fb";
+  ctx.fillRect(rx + 10, yTop, 5, RIM_H);
+  ctx.fillStyle = "#5f7488";
+  ctx.fillRect(rx + rw - 10, yTop, 10, RIM_H);
+  ctx.fillStyle = "#3f5060";
+  ctx.fillRect(rx, yTop, 3, RIM_H);
+  ctx.fillRect(rx + rw - 3, yTop, 3, RIM_H);
+  ctx.fillRect(rx, yTop, rw, 2); // obere/untere Linie
+  ctx.fillRect(rx, yTop + RIM_H - 2, rw, 2);
+}
+
+function drawPipes() {
+  for (const p of pipes) {
+    const topH = p.gapY;
+    const botY = p.gapY + gapH;
+    const botH = H - FLOOR_H - botY;
+    // oberes Rohr
+    drawPipeSegment(p.x, 0, topH - RIM_H);
+    drawPipeRim(p.x, topH - RIM_H);
+    // unteres Rohr
+    drawPipeRim(p.x, botY);
+    drawPipeSegment(p.x, botY + RIM_H, botH - RIM_H);
+  }
+}
+
+// ===========================================================================
 // EINGABE
 // ===========================================================================
 let overLockUntil = 0; // verhindert versehentlichen Sofort-Neustart
@@ -126,6 +218,7 @@ function flap() {
 
 function startGame() {
   resetDuck();
+  resetPipes();
   flapDuck(); // kleiner Anschub beim Start
   state = STATE.PLAY;
 }
@@ -174,9 +267,10 @@ function update() {
   ticks++;
   if (state === STATE.PLAY) {
     updateDuck();
+    updatePipes();
     // Boden / Decke beenden das Spiel erst ab Schritt 4 sauber; vorerst clampen.
-    if (duck.y > H - 40) {
-      duck.y = H - 40;
+    if (duck.y > H - FLOOR_H - DUCK_R) {
+      duck.y = H - FLOOR_H - DUCK_R;
       duck.vy = 0;
     }
     if (duck.y < 0) {
@@ -186,12 +280,21 @@ function update() {
   }
 }
 
+// Boden zeichnen (Platzhalter — Detail folgt in Schritt 5).
+function drawFloor() {
+  ctx.fillStyle = "#3aa0c8";
+  ctx.fillRect(0, H - FLOOR_H, W, FLOOR_H);
+  ctx.fillStyle = "#2c86a8";
+  ctx.fillRect(0, H - FLOOR_H, W, 4);
+}
+
 function draw() {
   // Hintergrund (Platzhalter — echtes Badezimmer folgt in Schritt 5)
   ctx.fillStyle = "#7ec8d6";
   ctx.fillRect(0, 0, W, H);
 
   if (state === STATE.MENU) {
+    drawFloor();
     // Ente schwebt sanft auf und ab
     const bob = Math.sin(ticks / 18) * 6;
     drawDuck(W / 2, H / 2 - 40 + bob, Math.sin(ticks / 18) * 0.08);
@@ -200,8 +303,12 @@ function draw() {
       pixelText("TAP ZUM START", W / 2, H / 2 + 90, 14, "#1a1428");
     }
   } else if (state === STATE.PLAY) {
+    drawPipes();
+    drawFloor();
     drawDuck(DUCK_X, duck.y, duckAngle());
   } else if (state === STATE.OVER) {
+    drawPipes();
+    drawFloor();
     drawDuck(DUCK_X, duck.y, duckAngle());
     pixelText("GAME OVER", W / 2, H / 2, 20, "#e23b3b");
   }
