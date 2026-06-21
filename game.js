@@ -327,6 +327,66 @@ function drawBackground() {
 }
 
 // ===========================================================================
+// EFFEKTE (Partikel + Screen-Shake)
+// ===========================================================================
+let particles = [];
+let shakeT = 0; // verbleibende Frames Screen-Shake
+
+function spawnSplash(x, y) {
+  // kleine Wassertropfen beim Flap, nach hinten/unten spritzend
+  for (let i = 0; i < 5; i++) {
+    particles.push({
+      x,
+      y,
+      vx: -1 - Math.random() * 1.5,
+      vy: 0.5 - Math.random() * 2,
+      life: 18 + Math.random() * 10,
+      max: 28,
+      size: 2 + Math.random() * 2,
+      color: "#bdeaf6",
+    });
+  }
+}
+
+function spawnBurst(x, y) {
+  // Feder-/Wasser-Explosion beim Crash
+  for (let i = 0; i < 22; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const s = 1 + Math.random() * 3.5;
+    particles.push({
+      x,
+      y,
+      vx: Math.cos(a) * s,
+      vy: Math.sin(a) * s - 1,
+      life: 24 + Math.random() * 18,
+      max: 42,
+      size: 2 + Math.random() * 3,
+      color: Math.random() < 0.5 ? "#ffd23f" : "#ffffff",
+    });
+  }
+}
+
+function updateParticles() {
+  for (const p of particles) {
+    p.vy += 0.18; // Schwerkraft
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life--;
+  }
+  particles = particles.filter((p) => p.life > 0);
+  if (shakeT > 0) shakeT--;
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    ctx.globalAlpha = Math.max(0, p.life / p.max);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x, p.y, p.size, p.size);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ===========================================================================
 // SOUND (synthetisiert via Web Audio API — keine externen Dateien)
 // ===========================================================================
 let audioCtx = null;
@@ -420,6 +480,7 @@ function flap() {
   } else if (state === STATE.PLAY) {
     flapDuck();
     sndSqueak();
+    spawnSplash(DUCK_X - 12, duck.y + 8);
   } else if (state === STATE.OVER) {
     if (ticks >= overLockUntil) startGame();
   }
@@ -428,9 +489,17 @@ function flap() {
 function startGame() {
   resetDuck();
   resetPipes();
+  particles = [];
+  shakeT = 0;
   score = 0;
   flapDuck(); // kleiner Anschub beim Start
   state = STATE.PLAY;
+}
+
+// Schwierigkeit steigt mit dem Score: schneller + engere Lücke (mit Grenzen).
+function applyDifficulty() {
+  pipeSpeed = 2.1 + Math.min(score * 0.035, 1.7);
+  gapH = Math.max(116, 142 - score * 1.1);
 }
 
 function gameOver() {
@@ -438,6 +507,8 @@ function gameOver() {
   state = STATE.OVER;
   overLockUntil = ticks + 36; // ~0.6 s Sperre gegen Sofort-Neustart
   sndCrash();
+  spawnBurst(DUCK_X, duck.y);
+  shakeT = 16;
   if (score > best) {
     best = score;
     saveBest();
@@ -517,7 +588,9 @@ function pixelText(text, x, y, size, color, align = "center") {
 function update() {
   ticks++;
   updateBubbles();
+  updateParticles();
   if (state === STATE.PLAY) {
+    applyDifficulty();
     bgScroll += pipeSpeed * 0.3; // dezenter Parallax-Effekt
     updateDuck();
     updatePipes();
@@ -561,30 +634,41 @@ function drawFloor() {
 }
 
 function draw() {
+  // Screen-Shake: gesamte Szene leicht versetzt zeichnen.
+  ctx.save();
+  if (shakeT > 0) {
+    const m = (shakeT / 16) * 6;
+    ctx.translate((Math.random() - 0.5) * m, (Math.random() - 0.5) * m);
+  }
+
   drawBackground();
 
   if (state === STATE.MENU) {
     drawFloor();
     // Ente schwebt sanft auf und ab
     const bob = Math.sin(ticks / 18) * 6;
-    drawDuck(W / 2, H / 2 - 40 + bob, Math.sin(ticks / 18) * 0.08);
-    pixelText("DUCKY FLOAT", W / 2, H / 2 + 40, 24, "#ffd23f");
+    drawDuck(W / 2, H / 2 - 44 + bob, Math.sin(ticks / 18) * 0.08);
+    pixelText("DUCKY FLOAT", W / 2, H / 2 + 36, 24, "#ffd23f");
+    pixelText("BEST  " + best, W / 2, H / 2 + 66, 12, "#1a1428");
     if (Math.floor(ticks / 30) % 2 === 0) {
-      pixelText("TAP ZUM START", W / 2, H / 2 + 90, 14, "#1a1428");
+      pixelText("TAP ZUM START", W / 2, H / 2 + 100, 14, "#1a1428");
     }
   } else if (state === STATE.PLAY) {
     drawPipes();
     drawFloor();
+    drawParticles();
     drawDuck(DUCK_X, duck.y, duckAngle());
     pixelText(String(score), W / 2, 54, 40, "#ffffff");
   } else if (state === STATE.OVER) {
     drawPipes();
     drawFloor();
+    drawParticles();
     drawDuck(DUCK_X, duck.y, duckAngle());
     drawGameOver();
   }
 
-  drawMuteIcon();
+  ctx.restore();
+  drawMuteIcon(); // Icon ohne Shake, immer ruhig
 }
 
 // Lautsprecher-Icon (klein, oben rechts). Zeigt an/aus.
