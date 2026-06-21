@@ -24,6 +24,18 @@ let ticks = 0;
 // --- Punkte ----------------------------------------------------------------
 let score = 0;
 let best = loadBest();
+let newBest = false; // im letzten Lauf neuen Highscore erreicht?
+
+// Medaillen-Stufen nach Score (großzügig, da das Spiel jetzt sanfter ist).
+const MEDALS = [
+  { min: 40, name: "GOLD", face: "#ffe066", ring: "#c8961f", text: "#7a5a00" },
+  { min: 25, name: "SILBER", face: "#e2e8ee", ring: "#9aa7b4", text: "#4a5560" },
+  { min: 12, name: "BRONZE", face: "#e09a5a", ring: "#a5642e", text: "#5a3210" },
+];
+function medalFor(s) {
+  for (const m of MEDALS) if (s >= m.min) return m;
+  return null;
+}
 
 function loadBest() {
   try {
@@ -76,12 +88,12 @@ const DUCK_COLORS = {
   w: "#c8901f", // Flügel-Linie
 };
 
-// Physik-Parameter
-const GRAVITY = 0.42;
-const FLAP_VELOCITY = -6.6;
-const MAX_FALL = 9.5;
+// Physik-Parameter (bewusst sanft & verzeihend abgestimmt)
+const GRAVITY = 0.30; // floatiger Fall
+const FLAP_VELOCITY = -5.2; // weicherer Sprung (kein harter Schubser)
+const MAX_FALL = 7.5; // begrenzt das Tempo nach unten
 const DUCK_X = 86; // feste horizontale Position
-const DUCK_R = 13; // Kollisionsradius (etwas kleiner als Sprite = fair)
+const DUCK_R = 12; // Kollisionsradius (kleiner als Sprite = fair)
 
 const duck = {
   y: H / 2,
@@ -103,19 +115,20 @@ function updateDuck() {
   duck.y += duck.vy;
 }
 
-// Zeichnet die Ente an (cx, cy) mit Rotation abhängig von der Geschwindigkeit.
-function drawDuck(cx, cy, angle) {
+// Zeichnet die Ente an (cx, cy) mit Rotation und optionaler Pixelgröße.
+function drawDuck(cx, cy, angle, px) {
+  px = px || DUCK_PX;
   ctx.save();
   ctx.translate(cx, cy);
   ctx.rotate(angle);
-  const off = (DUCK_SPRITE.length * DUCK_PX) / 2;
+  const off = (DUCK_SPRITE.length * px) / 2;
   for (let row = 0; row < DUCK_SPRITE.length; row++) {
     const line = DUCK_SPRITE[row];
     for (let col = 0; col < line.length; col++) {
       const c = line[col];
       if (c === ".") continue;
       ctx.fillStyle = DUCK_COLORS[c];
-      ctx.fillRect(col * DUCK_PX - off, row * DUCK_PX - off, DUCK_PX, DUCK_PX);
+      ctx.fillRect(col * px - off, row * px - off, px, px);
     }
   }
   ctx.restore();
@@ -136,11 +149,13 @@ const PIPE_W = 54; // Breite eines Rohrs
 const RIM_H = 16; // Höhe der Rohr-Kappe an der Lücke
 const RIM_OVER = 5; // wie weit die Kappe seitlich übersteht
 
-// Schwierigkeit (wird in Schritt 7 dynamisch erhöht)
-let pipeSpeed = 2.1; // Scroll-Tempo
-let gapH = 142; // Lückenhöhe
+// Schwierigkeit (steigt langsam & sanft mit dem Score)
+const BASE_SPEED = 1.75; // Start-Scroll-Tempo (langsamer Einstieg)
+const BASE_GAP = 172; // große Start-Lücke
+let pipeSpeed = BASE_SPEED;
+let gapH = BASE_GAP;
 const SPAWN_X = W + 40; // Startposition rechts außerhalb
-const SPAWN_GAP_PX = 168; // horizontaler Abstand zwischen Rohren
+const SPAWN_GAP_PX = 192; // mehr Abstand = mehr Reaktionszeit
 
 let pipes = [];
 let spawnAcc = 0;
@@ -148,15 +163,17 @@ let spawnAcc = 0;
 function resetPipes() {
   pipes = [];
   spawnAcc = 0;
-  pipeSpeed = 2.1;
-  gapH = 142;
+  pipeSpeed = BASE_SPEED;
+  gapH = BASE_GAP;
 }
 
 function spawnPipe() {
   const minGapY = 46;
   const maxGapY = H - FLOOR_H - gapH - 46;
   const gapY = minGapY + Math.random() * (maxGapY - minGapY);
-  pipes.push({ x: SPAWN_X, gapY, passed: false });
+  const p = { x: SPAWN_X, gapY, passed: false };
+  pipes.push(p);
+  maybeSpawnToken(p);
 }
 
 function updatePipes() {
@@ -327,6 +344,70 @@ function drawBackground() {
 }
 
 // ===========================================================================
+// BONUS-ENTE (goldenes Sammelobjekt in manchen Lücken)
+// ===========================================================================
+const TOKEN_R = 11; // Einsammel-Radius
+const TOKEN_BONUS = 3; // Extrapunkte
+let tokens = [];
+
+function resetTokens() {
+  tokens = [];
+}
+
+// Beim Spawnen eines Rohrs ggf. eine Bonus-Ente in die Lückenmitte setzen.
+function maybeSpawnToken(p) {
+  if (Math.random() < 0.4) {
+    tokens.push({
+      x: p.x + PIPE_W / 2,
+      y: p.gapY + gapH / 2,
+      taken: false,
+      phase: Math.random() * Math.PI * 2,
+    });
+  }
+}
+
+function updateTokens() {
+  for (const t of tokens) {
+    t.x -= pipeSpeed;
+    t.phase += 0.12;
+    // Einsammeln, wenn die Ente nah genug ist
+    const dx = t.x - DUCK_X;
+    const dy = t.y - duck.y;
+    if (!t.taken && dx * dx + dy * dy < (TOKEN_R + DUCK_R) * (TOKEN_R + DUCK_R)) {
+      t.taken = true;
+      score += TOKEN_BONUS;
+      spawnSparkle(t.x, t.y);
+      sndCoin();
+    }
+  }
+  tokens = tokens.filter((t) => !t.taken && t.x + TOKEN_R > -4);
+}
+
+function drawTokens() {
+  for (const t of tokens) {
+    const pulse = 1 + Math.sin(t.phase) * 0.12;
+    ctx.save();
+    ctx.translate(t.x, t.y);
+    // goldener Glow-Ring
+    ctx.globalAlpha = 0.35 + Math.sin(t.phase) * 0.15;
+    ctx.fillStyle = "#ffe066";
+    ctx.beginPath();
+    ctx.arc(0, 0, (TOKEN_R + 4) * pulse, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.restore();
+    // kleine Ente
+    drawDuck(t.x, t.y, Math.sin(t.phase) * 0.15, 2);
+    // Funkel-Sternchen oben rechts
+    const sx = t.x + 9 + Math.cos(t.phase) * 2;
+    const sy = t.y - 10 + Math.sin(t.phase) * 2;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(sx - 1, sy - 3, 2, 6);
+    ctx.fillRect(sx - 3, sy - 1, 6, 2);
+  }
+}
+
+// ===========================================================================
 // EFFEKTE (Partikel + Screen-Shake)
 // ===========================================================================
 let particles = [];
@@ -366,9 +447,46 @@ function spawnBurst(x, y) {
   }
 }
 
+// Goldenes Konfetti für die NEW-BEST-Feier (regnet von oben).
+const CONFETTI_COLORS = ["#ffd23f", "#ff8c1a", "#ffffff", "#ff5d8f", "#5fc3e0"];
+function spawnConfetti() {
+  for (let i = 0; i < 60; i++) {
+    particles.push({
+      x: Math.random() * W,
+      y: -10 - Math.random() * 60,
+      vx: (Math.random() - 0.5) * 1.5,
+      vy: 1 + Math.random() * 2.5,
+      life: 90 + Math.random() * 60,
+      max: 150,
+      size: 3 + Math.random() * 3,
+      color: CONFETTI_COLORS[(i * 7) % CONFETTI_COLORS.length],
+      grav: 0.05,
+    });
+  }
+}
+
+// Funkel-Sternchen beim Einsammeln der Bonus-Ente.
+function spawnSparkle(x, y) {
+  for (let i = 0; i < 14; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const s = 1 + Math.random() * 2.5;
+    particles.push({
+      x,
+      y,
+      vx: Math.cos(a) * s,
+      vy: Math.sin(a) * s,
+      life: 20 + Math.random() * 16,
+      max: 36,
+      size: 2 + Math.random() * 2,
+      color: Math.random() < 0.5 ? "#fff7c4" : "#ffd23f",
+      grav: 0.02,
+    });
+  }
+}
+
 function updateParticles() {
   for (const p of particles) {
-    p.vy += 0.18; // Schwerkraft
+    p.vy += p.grav !== undefined ? p.grav : 0.18; // Schwerkraft
     p.x += p.vx;
     p.y += p.vy;
     p.life--;
@@ -447,6 +565,19 @@ function sndPoint() {
   tone(880, 880, 0.07, "square", 0.12, 0);
   tone(1320, 1320, 0.1, "square", 0.12, 0.07);
 }
+// Münze / Bonus-Ente: helles aufsteigendes Arpeggio.
+function sndCoin() {
+  tone(988, 988, 0.06, "square", 0.11, 0);
+  tone(1319, 1319, 0.06, "square", 0.11, 0.05);
+  tone(1760, 1760, 0.1, "square", 0.11, 0.1);
+}
+// Fanfare bei neuem Highscore.
+function sndFanfare() {
+  tone(523, 523, 0.1, "square", 0.11, 0);
+  tone(659, 659, 0.1, "square", 0.11, 0.1);
+  tone(784, 784, 0.1, "square", 0.11, 0.2);
+  tone(1047, 1047, 0.22, "square", 0.12, 0.3);
+}
 // Crash: kurzer Rausch-Knall + absteigender Ton.
 function sndCrash() {
   if (!audioCtx || muted) return;
@@ -489,17 +620,20 @@ function flap() {
 function startGame() {
   resetDuck();
   resetPipes();
+  resetTokens();
   particles = [];
   shakeT = 0;
   score = 0;
+  newBest = false;
   flapDuck(); // kleiner Anschub beim Start
   state = STATE.PLAY;
 }
 
-// Schwierigkeit steigt mit dem Score: schneller + engere Lücke (mit Grenzen).
+// Schwierigkeit steigt langsam mit dem Score: leicht schneller + etwas engere
+// Lücke, mit großzügigen Untergrenzen, damit es fair bleibt.
 function applyDifficulty() {
-  pipeSpeed = 2.1 + Math.min(score * 0.035, 1.7);
-  gapH = Math.max(116, 142 - score * 1.1);
+  pipeSpeed = BASE_SPEED + Math.min(score * 0.022, 1.25);
+  gapH = Math.max(140, BASE_GAP - score * 0.7);
 }
 
 function gameOver() {
@@ -509,9 +643,12 @@ function gameOver() {
   sndCrash();
   spawnBurst(DUCK_X, duck.y);
   shakeT = 16;
-  if (score > best) {
+  if (score > best && score > 0) {
     best = score;
+    newBest = true;
     saveBest();
+    spawnConfetti();
+    sndFanfare();
   }
 }
 
@@ -594,6 +731,7 @@ function update() {
     bgScroll += pipeSpeed * 0.3; // dezenter Parallax-Effekt
     updateDuck();
     updatePipes();
+    updateTokens();
     updateScore();
     // Decke: anstoßen, aber nicht sterben (klassisches Flappy-Verhalten)
     if (duck.y < DUCK_R) {
@@ -655,12 +793,14 @@ function draw() {
     }
   } else if (state === STATE.PLAY) {
     drawPipes();
+    drawTokens();
     drawFloor();
     drawParticles();
     drawDuck(DUCK_X, duck.y, duckAngle());
     pixelText(String(score), W / 2, 54, 40, "#ffffff");
   } else if (state === STATE.OVER) {
     drawPipes();
+    drawTokens();
     drawFloor();
     drawParticles();
     drawDuck(DUCK_X, duck.y, duckAngle());
@@ -713,26 +853,90 @@ function drawMuteIcon() {
 }
 
 // Game-Over-Panel mit Score & Highscore.
+// Medaillen-Scheibe mit Band, Glanz und Stern.
+function drawMedal(cx, cy, r, medal) {
+  // Bänder hinter der Medaille
+  ctx.fillStyle = "#e23b3b";
+  ctx.beginPath();
+  ctx.moveTo(cx - r * 0.7, cy - r);
+  ctx.lineTo(cx - r * 0.2, cy - r * 1.8);
+  ctx.lineTo(cx + r * 0.1, cy - r * 0.7);
+  ctx.fill();
+  ctx.fillStyle = "#3a86d0";
+  ctx.beginPath();
+  ctx.moveTo(cx + r * 0.7, cy - r);
+  ctx.lineTo(cx + r * 0.2, cy - r * 1.8);
+  ctx.lineTo(cx - r * 0.1, cy - r * 0.7);
+  ctx.fill();
+  // Ring
+  ctx.fillStyle = medal.ring;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+  // Scheibe
+  ctx.fillStyle = medal.face;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r - 3, 0, Math.PI * 2);
+  ctx.fill();
+  // Glanz-Sichel
+  ctx.fillStyle = "rgba(255,255,255,0.45)";
+  ctx.beginPath();
+  ctx.arc(cx - r * 0.25, cy - r * 0.25, r - 6, Math.PI * 0.9, Math.PI * 1.6);
+  ctx.fill();
+  // Stern in der Mitte
+  pixelText("★", cx, cy + 1, r, medal.text);
+}
+
 function drawGameOver() {
   // halbtransparenter Overlay
   ctx.fillStyle = "rgba(26, 20, 40, 0.55)";
   ctx.fillRect(0, 0, W, H);
   // Panel
-  const pw = 200;
-  const ph = 170;
+  const medal = medalFor(score);
+  const pw = 212;
+  const ph = 196;
   const px = (W - pw) / 2;
-  const py = (H - ph) / 2 - 10;
+  const py = (H - ph) / 2 - 6;
   ctx.fillStyle = "#fff0b8";
   ctx.fillRect(px - 3, py - 3, pw + 6, ph + 6);
   ctx.fillStyle = "#2a2140";
   ctx.fillRect(px, py, pw, ph);
 
-  pixelText("GAME OVER", W / 2, py + 34, 24, "#e23b3b");
-  pixelText("SCORE", W / 2, py + 74, 14, "#b8a8d8");
-  pixelText(String(score), W / 2, py + 100, 30, "#ffd23f");
-  pixelText("BEST  " + best, W / 2, py + 134, 14, "#7ec8d6");
+  pixelText("GAME OVER", W / 2, py + 30, 22, "#e23b3b");
+
+  if (medal) {
+    // Medaille links, Werte rechts
+    drawMedal(px + 52, py + 96, 28, medal);
+    pixelText(medal.name, px + 52, py + 138, 12, medal.face);
+    const rx = px + 128;
+    pixelText("SCORE", rx, py + 66, 12, "#b8a8d8", "center");
+    pixelText(String(score), rx, py + 90, 26, "#ffd23f", "center");
+    pixelText("BEST", rx, py + 120, 12, "#b8a8d8", "center");
+    pixelText(String(best), rx, py + 140, 20, "#7ec8d6", "center");
+  } else {
+    // ohne Medaille: zentriert
+    pixelText("SCORE", W / 2, py + 70, 14, "#b8a8d8");
+    pixelText(String(score), W / 2, py + 98, 30, "#ffd23f");
+    pixelText("BEST  " + best, W / 2, py + 138, 14, "#7ec8d6");
+  }
+
+  // NEW-BEST-Banner (pulsierend)
+  if (newBest) {
+    const s = 1 + Math.sin(ticks / 6) * 0.08;
+    ctx.save();
+    ctx.translate(W / 2, py + 168);
+    ctx.scale(s, s);
+    ctx.fillStyle = "#e23b3b";
+    ctx.fillRect(-72, -12, 144, 24);
+    ctx.fillStyle = "#ffd23f";
+    ctx.fillRect(-72, -12, 144, 3);
+    ctx.fillRect(-72, 9, 144, 3);
+    pixelText("★ NEW BEST ★", 0, 1, 14, "#ffffff");
+    ctx.restore();
+  }
+
   if (Math.floor(ticks / 30) % 2 === 0) {
-    pixelText("TAP FÜR NEUSTART", W / 2, py + ph + 24, 12, "#ffffff");
+    pixelText("TAP FÜR NEUSTART", W / 2, py + ph + 22, 12, "#ffffff");
   }
 }
 
