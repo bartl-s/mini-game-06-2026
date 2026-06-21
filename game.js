@@ -254,6 +254,78 @@ function drawPipes() {
 }
 
 // ===========================================================================
+// HINTERGRUND (Badezimmer-Fliesen + Parallax-Blasen)
+// ===========================================================================
+const TILE = 36; // Fliesengröße
+let bgScroll = 0; // Parallax-Versatz der Fliesenwand
+
+// Seifenblasen als sanfte Parallax-Deko (driften nach oben).
+const bubbles = [];
+function initBubbles() {
+  for (let i = 0; i < 14; i++) {
+    bubbles.push({
+      x: Math.random() * W,
+      y: Math.random() * H,
+      r: 2 + Math.random() * 5,
+      spd: 0.2 + Math.random() * 0.5,
+      drift: Math.random() * Math.PI * 2,
+    });
+  }
+}
+initBubbles();
+
+function updateBubbles() {
+  for (const b of bubbles) {
+    b.y -= b.spd;
+    b.drift += 0.04;
+    b.x += Math.sin(b.drift) * 0.3;
+    if (b.y + b.r < 0) {
+      b.y = H + b.r;
+      b.x = Math.random() * W;
+    }
+  }
+}
+
+function drawBackground() {
+  // Grundfarbe der Wand
+  ctx.fillStyle = "#86cdda";
+  ctx.fillRect(0, 0, W, H);
+
+  // Fliesenraster mit leichtem Schachbrett-Ton + Fugen
+  const off = Math.floor(bgScroll) % TILE;
+  for (let ty = -1; ty * TILE < H + TILE; ty++) {
+    for (let tx = -1; tx * TILE - off < W + TILE; tx++) {
+      const x = tx * TILE - off;
+      const y = ty * TILE;
+      const checker = (tx + ty) % 2 === 0;
+      ctx.fillStyle = checker ? "#8ed3df" : "#7ec5d3";
+      ctx.fillRect(x, y, TILE, TILE);
+      // sanftes Glanzlicht oben links jeder Fliese
+      ctx.fillStyle = "rgba(255,255,255,0.08)";
+      ctx.fillRect(x + 2, y + 2, TILE - 10, 3);
+    }
+  }
+  // Fugenlinien
+  ctx.fillStyle = "rgba(70,160,180,0.45)";
+  for (let tx = -1; tx * TILE - off < W + TILE; tx++) {
+    ctx.fillRect(tx * TILE - off, 0, 2, H);
+  }
+  for (let ty = 0; ty * TILE < H; ty++) {
+    ctx.fillRect(0, ty * TILE, W, 2);
+  }
+
+  // Blasen
+  for (const b of bubbles) {
+    ctx.fillStyle = "rgba(255,255,255,0.22)";
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.5)";
+    ctx.fillRect(b.x - b.r * 0.4, b.y - b.r * 0.4, 1.5, 1.5);
+  }
+}
+
+// ===========================================================================
 // EINGABE
 // ===========================================================================
 let overLockUntil = 0; // verhindert versehentlichen Sofort-Neustart
@@ -323,7 +395,9 @@ function pixelText(text, x, y, size, color, align = "center") {
 // ===========================================================================
 function update() {
   ticks++;
+  updateBubbles();
   if (state === STATE.PLAY) {
+    bgScroll += pipeSpeed * 0.3; // dezenter Parallax-Effekt
     updateDuck();
     updatePipes();
     updateScore();
@@ -342,18 +416,31 @@ function update() {
   }
 }
 
-// Boden zeichnen (Platzhalter — Detail folgt in Schritt 5).
+// Boden zeichnen: Wasserbecken mit Wellen-Oberfläche und scrollenden Fliesen.
 function drawFloor() {
-  ctx.fillStyle = "#3aa0c8";
-  ctx.fillRect(0, H - FLOOR_H, W, FLOOR_H);
-  ctx.fillStyle = "#2c86a8";
-  ctx.fillRect(0, H - FLOOR_H, W, 4);
+  const top = H - FLOOR_H;
+  // Wasserkörper
+  ctx.fillStyle = "#34a6cf";
+  ctx.fillRect(0, top, W, FLOOR_H);
+  ctx.fillStyle = "#2b8fb8";
+  ctx.fillRect(0, top + 14, W, FLOOR_H - 14);
+  // Wellen-Oberfläche (kleine Pixel-Wellen)
+  const ph = Math.floor(bgScroll) % 12;
+  ctx.fillStyle = "#bdeaf6";
+  for (let x = -12; x < W + 12; x += 12) {
+    ctx.fillRect(x - ph, top, 6, 3);
+  }
+  ctx.fillStyle = "#5fc3e0";
+  for (let x = -12; x < W + 12; x += 12) {
+    ctx.fillRect(x - ph + 6, top + 3, 6, 2);
+  }
+  // Boden-Fliesenkante ganz unten
+  ctx.fillStyle = "#1f6f93";
+  ctx.fillRect(0, H - 6, W, 6);
 }
 
 function draw() {
-  // Hintergrund (Platzhalter — echtes Badezimmer folgt in Schritt 5)
-  ctx.fillStyle = "#7ec8d6";
-  ctx.fillRect(0, 0, W, H);
+  drawBackground();
 
   if (state === STATE.MENU) {
     drawFloor();
